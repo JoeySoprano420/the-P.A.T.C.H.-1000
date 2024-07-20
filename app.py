@@ -48,8 +48,9 @@ class User(Document):
 # Scheduler setup
 scheduler = BackgroundScheduler()
 
+@app.route('/generate_report', methods=['POST'])
 def scheduled_task():
-    print("This task runs periodically.")
+          print("This task runs periodically.")
 
 scheduler.add_job(scheduled_task, 'interval', seconds=30)
 scheduler.start()
