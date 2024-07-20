@@ -17,7 +17,7 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
 app.config['MONGODB_SETTINGS'] = {
     'db': os.getenv('MONGODB_DB'),
     'host': os.getenv('MONGODB_HOST'),
-    'port': int(os.getenv('MONGODB_PORT')),
+   'port': int(os.getenv('MONGODB_PORT', 27017))
     'username': os.getenv('MONGODB_USERNAME'),
     'password': os.getenv('MONGODB_PASSWORD'),
 }
