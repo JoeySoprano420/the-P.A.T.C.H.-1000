@@ -18,6 +18,7 @@ def main():
         'flask_cors>=3.0.10',
         'flask_mail>=0.9.1',
         'python-dotenv>=0.19.1',
+        'mongoengine>=0.24.1',
     ]
 
     # Install each package
