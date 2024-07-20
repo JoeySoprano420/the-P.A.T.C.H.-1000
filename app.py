@@ -1,104 +1,105 @@
-from flask import Flask, request, jsonify, send_file
-from flask_jwt_extended import jwt_required
-import pandas as pd
-from io import BytesIO
-from mongoengine import Q
+from flask import Flask, jsonify, request
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required
+from flask_cors import CORS
+from flask_mail import Mail, Message
 from apscheduler.schedulers.background import BackgroundScheduler
+from mongoengine import connect, Document, StringField, Q
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from a .env file
+load_dotenv()
 
 app = Flask(__name__)
+
+# Configure Flask app
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
+app.config['MONGODB_SETTINGS'] = {
+    'db': os.getenv('MONGODB_DB'),
+    'host': os.getenv('MONGODB_HOST'),
+    'port': int(os.getenv('MONGODB_PORT')),
+    'username': os.getenv('MONGODB_USERNAME'),
+    'password': os.getenv('MONGODB_PASSWORD'),
+}
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER')
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT'))
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS') == 'True'
+app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL') == 'True'
+
+# Initialize extensions
+jwt = JWTManager(app)
+CORS(app)
+mail = Mail(app)
+connect(
+    db=app.config['MONGODB_SETTINGS']['db'],
+    host=app.config['MONGODB_SETTINGS']['host'],
+    port=app.config['MONGODB_SETTINGS']['port'],
+    username=app.config['MONGODB_SETTINGS']['username'],
+    password=app.config['MONGODB_SETTINGS']['password']
+)
+
+# Define a simple User model
+class User(Document):
+    username = StringField(required=True, unique=True)
+    password = StringField(required=True)
+
+# Scheduler setup
 scheduler = BackgroundScheduler()
 
-@app.route('/generate_report', methods=['POST'])
+def scheduled_task():
+    print("This task runs periodically.")
+
+scheduler.add_job(scheduled_task, 'interval', seconds=30)
+scheduler.start()
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
+
+    user = User(username=username, password=password)
+    try:
+        user.save()
+    except Exception as e:
+        return jsonify({"msg": "User already exists"}), 400
+
+    return jsonify({"msg": "User created successfully"}), 201
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    user = User.objects(username=username, password=password).first()
+    if user is None:
+        return jsonify({"msg": "Bad username or password"}), 401
+
+    access_token = create_access_token(identity=username)
+    return jsonify(access_token=access_token), 200
+
+@app.route('/protected', methods=['GET'])
 @jwt_required()
-def generate_report():
-    data = request.json
-    start_date = data.get('start_date')
-    end_date = data.get('end_date')
-    user_id = data.get('user_id')
-    event_type = data.get('event_type')
-    location = data.get('location')  # Additional filter
-    status = data.get('status')      # Additional filter
+def protected():
+    return jsonify({"msg": "This is a protected route"}), 200
 
-    query = Q()
-    if start_date:
-        query &= Q(timestamp__gte=pd.to_datetime(start_date))
-    if end_date:
-        query &= Q(timestamp__lte=pd.to_datetime(end_date))
-    if user_id:
-        query &= Q(user_id=user_id)
-    if event_type:
-        query &= Q(event_type=event_type)
-    if location:
-        query &= Q(location=location)
-    if status:
-        query &= Q(status=status)
+@app.route('/send-email', methods=['POST'])
+def send_email():
+    data = request.get_json()
+    recipient = data.get('recipient')
+    subject = data.get('subject')
+    body = data.get('body')
 
-    analytics_data = Analytics.objects(__raw__=query).all()
-    df = pd.DataFrame(list(analytics_data))
+    if not recipient or not subject or not body:
+        return jsonify({"msg": "Missing recipient, subject, or body"}), 400
 
-    if df.empty:
-        return jsonify({'msg': 'No data available for the given filters'}), 404
+    msg = Message(subject, recipients=[recipient], body=body)
+    mail.send(msg)
+    return jsonify({"msg": "Email sent successfully"}), 200
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Report')
-
-    output.seek(0)
-    return send_file(output, as_attachment=True, attachment_filename='custom_report.xlsx', mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-
-@app.route('/schedule_report', methods=['POST'])
-@jwt_required()
-def schedule_report_endpoint():
-    data = request.json
-    start_date = data.get('start_date')
-    end_date = data.get('end_date')
-    user_id = data.get('user_id')
-    event_type = data.get('event_type')
-    email = data.get('email')
-    schedule_time = data.get('schedule_time')
-
-    if not schedule_time:
-        return jsonify({'msg': 'Schedule time is required'}), 400
-
-    schedule_time = pd.to_datetime(schedule_time)
-    scheduler.add_job(schedule_report, 'date', run_date=schedule_time, args=[start_date, end_date, user_id, event_type, email])
-    scheduler.start()
-
-    return jsonify({'msg': 'Report scheduled successfully'}), 200
-
-def schedule_report(start_date, end_date, user_id, event_type, email):
-    # Generate the report
-    report_data = generate_report_data(start_date, end_date, user_id, event_type)
-    send_email_with_report(email, report_data)
-
-def generate_report_data(start_date, end_date, user_id, event_type):
-    query = Q()
-    if start_date:
-        query &= Q(timestamp__gte=pd.to_datetime(start_date))
-    if end_date:
-        query &= Q(timestamp__lte=pd.to_datetime(end_date))
-    if user_id:
-        query &= Q(user_id=user_id)
-    if event_type:
-        query &= Q(event_type=event_type)
-
-    analytics_data = Analytics.objects(__raw__=query).all()
-    df = pd.DataFrame(list(analytics_data))
-    return df
-
-def send_email_with_report(email, df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Report')
-
-    output.seek(0)
-    # Placeholder for email functionality
-    # Email sending code here
-
-def load_template(name):
-    # Load the template from file or database
-    templates = {
-        'default': '<Your default template>',
-        'custom': '<Your custom template>',
-    }
-    return templates.get(name, templates['default'])
+if __name__ == '__main__':
+    app.run(debug=True)
